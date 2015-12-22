@@ -522,6 +522,9 @@ func DevConfig() *Config {
 	conf.Server = true
 	conf.EnableDebug = true
 	conf.DisableAnonymousSignature = true
+	conf.BindAddr = "127.0.0.1"
+	conf.ClientAddr = "127.0.0.1"
+	conf.EnableUi = true
 	return conf
 }
 
