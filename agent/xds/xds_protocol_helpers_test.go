@@ -19,6 +19,7 @@ import (
 	envoy_discovery_v3 "github.com/envoyproxy/go-control-plane/envoy/service/discovery/v3"
 	envoy_type_v3 "github.com/envoyproxy/go-control-plane/envoy/type/v3"
 
+	"github.com/armon/go-metrics"
 	"github.com/golang/protobuf/proto"
 	"github.com/golang/protobuf/ptypes"
 	"github.com/golang/protobuf/ptypes/wrappers"
@@ -118,6 +119,7 @@ type testServerScenario struct {
 	server *Server
 	mgr    *testManager
 	envoy  *TestEnvoy
+	sink   *metrics.InmemSink
 	errCh  <-chan error
 }
 
@@ -155,6 +157,17 @@ func newTestServerScenarioInner(
 		envoy.Close()
 	})
 
+	sink := metrics.NewInmemSink(1*time.Minute, 1*time.Minute)
+	cfg := metrics.DefaultConfig("consul.xds.test")
+	cfg.EnableHostname = false
+	cfg.EnableRuntimeMetrics = false
+	metrics.NewGlobal(cfg, sink)
+
+	t.Cleanup(func() {
+		sink := &metrics.BlackholeSink{}
+		metrics.NewGlobal(cfg, sink)
+	})
+
 	s := NewServer(
 		testutil.Logger(t),
 		mgr,
@@ -178,6 +191,7 @@ func newTestServerScenarioInner(
 		server: s,
 		mgr:    mgr,
 		envoy:  envoy,
+		sink:   sink,
 		errCh:  errCh,
 	}
 }
@@ -377,6 +391,24 @@ func makeTestCluster(t *testing.T, snap *proxycfg.ConfigSnapshot, fixtureName st
 			ConnectTimeout:  ptypes.DurationProto(5 * time.Second),
 			TransportSocket: xdsNewUpstreamTransportSocket(t, snap, "db.default.dc1.internal.11111111-2222-3333-4444-555555555555.consul"),
 		}
+	case "tcp:db:timeout":
+		return &envoy_cluster_v3.Cluster{
+			Name: "db.default.dc1.internal.11111111-2222-3333-4444-555555555555.consul",
+			ClusterDiscoveryType: &envoy_cluster_v3.Cluster_Type{
+				Type: envoy_cluster_v3.Cluster_EDS,
+			},
+			EdsClusterConfig: &envoy_cluster_v3.Cluster_EdsClusterConfig{
+				EdsConfig: xdsNewADSConfig(),
+			},
+			CircuitBreakers:  &envoy_cluster_v3.CircuitBreakers{},
+			OutlierDetection: &envoy_cluster_v3.OutlierDetection{},
+			AltStatName:      "db.default.dc1.internal.11111111-2222-3333-4444-555555555555.consul",
+			CommonLbConfig: &envoy_cluster_v3.Cluster_CommonLbConfig{
+				HealthyPanicThreshold: &envoy_type_v3.Percent{Value: 0},
+			},
+			ConnectTimeout:  ptypes.DurationProto(1337 * time.Second),
+			TransportSocket: xdsNewUpstreamTransportSocket(t, snap, "db.default.dc1.internal.11111111-2222-3333-4444-555555555555.consul"),
+		}
 	case "http2:db":
 		return &envoy_cluster_v3.Cluster{
 			Name: "db.default.dc1.internal.11111111-2222-3333-4444-555555555555.consul",
@@ -395,6 +427,25 @@ func makeTestCluster(t *testing.T, snap *proxycfg.ConfigSnapshot, fixtureName st
 			ConnectTimeout:       ptypes.DurationProto(5 * time.Second),
 			TransportSocket:      xdsNewUpstreamTransportSocket(t, snap, "db.default.dc1.internal.11111111-2222-3333-4444-555555555555.consul"),
 			Http2ProtocolOptions: &envoy_core_v3.Http2ProtocolOptions{},
+		}
+	case "http:db":
+		return &envoy_cluster_v3.Cluster{
+			Name: "db.default.dc1.internal.11111111-2222-3333-4444-555555555555.consul",
+			ClusterDiscoveryType: &envoy_cluster_v3.Cluster_Type{
+				Type: envoy_cluster_v3.Cluster_EDS,
+			},
+			EdsClusterConfig: &envoy_cluster_v3.Cluster_EdsClusterConfig{
+				EdsConfig: xdsNewADSConfig(),
+			},
+			CircuitBreakers:  &envoy_cluster_v3.CircuitBreakers{},
+			OutlierDetection: &envoy_cluster_v3.OutlierDetection{},
+			AltStatName:      "db.default.dc1.internal.11111111-2222-3333-4444-555555555555.consul",
+			CommonLbConfig: &envoy_cluster_v3.Cluster_CommonLbConfig{
+				HealthyPanicThreshold: &envoy_type_v3.Percent{Value: 0},
+			},
+			ConnectTimeout:  ptypes.DurationProto(5 * time.Second),
+			TransportSocket: xdsNewUpstreamTransportSocket(t, snap, "db.default.dc1.internal.11111111-2222-3333-4444-555555555555.consul"),
+			// HttpProtocolOptions: &envoy_core_v3.Http1ProtocolOptions{},
 		}
 	case "tcp:geo-cache":
 		return &envoy_cluster_v3.Cluster{
@@ -430,7 +481,18 @@ func makeTestEndpoints(t *testing.T, _ *proxycfg.ConfigSnapshot, fixtureName str
 				},
 			},
 		}
-	case "http2:db":
+	case "tcp:db[0]":
+		return &envoy_endpoint_v3.ClusterLoadAssignment{
+			ClusterName: "db.default.dc1.internal.11111111-2222-3333-4444-555555555555.consul",
+			Endpoints: []*envoy_endpoint_v3.LocalityLbEndpoints{
+				{
+					LbEndpoints: []*envoy_endpoint_v3.LbEndpoint{
+						xdsNewEndpointWithHealth("10.10.1.1", 8080, envoy_core_v3.HealthStatus_HEALTHY, 1),
+					},
+				},
+			},
+		}
+	case "http2:db", "http:db":
 		return &envoy_endpoint_v3.ClusterLoadAssignment{
 			ClusterName: "db.default.dc1.internal.11111111-2222-3333-4444-555555555555.consul",
 			Endpoints: []*envoy_endpoint_v3.LocalityLbEndpoints{
@@ -556,6 +618,34 @@ func makeTestListener(t *testing.T, snap *proxycfg.ConfigSnapshot, fixtureName s
 				},
 			},
 		}
+	case "http:db:rds":
+		return &envoy_listener_v3.Listener{
+			Name:             "db:127.0.0.1:9191",
+			Address:          makeAddress("127.0.0.1", 9191),
+			TrafficDirection: envoy_core_v3.TrafficDirection_OUTBOUND,
+			FilterChains: []*envoy_listener_v3.FilterChain{
+				{
+					Filters: []*envoy_listener_v3.Filter{
+						xdsNewFilter(t, "envoy.filters.network.http_connection_manager", &envoy_http_v3.HttpConnectionManager{
+							HttpFilters: []*envoy_http_v3.HttpFilter{
+								{Name: "envoy.filters.http.router"},
+							},
+							RouteSpecifier: &envoy_http_v3.HttpConnectionManager_Rds{
+								Rds: &envoy_http_v3.Rds{
+									RouteConfigName: "db",
+									ConfigSource:    xdsNewADSConfig(),
+								},
+							},
+							StatPrefix: "upstream.db.default.dc1",
+							Tracing: &envoy_http_v3.HttpConnectionManager_Tracing{
+								RandomSampling: &envoy_type_v3.Percent{Value: 0},
+							},
+							// HttpProtocolOptions: &envoy_core_v3.Http1ProtocolOptions{},
+						}),
+					},
+				},
+			},
+		}
 	case "tcp:geo-cache":
 		return &envoy_listener_v3.Listener{
 			Name:             "prepared_query:geo-cache:127.10.10.10:8181",
@@ -582,7 +672,7 @@ func makeTestListener(t *testing.T, snap *proxycfg.ConfigSnapshot, fixtureName s
 
 func makeTestRoute(t *testing.T, fixtureName string) *envoy_route_v3.RouteConfiguration {
 	switch fixtureName {
-	case "http2:db":
+	case "http2:db", "http:db":
 		return &envoy_route_v3.RouteConfiguration{
 			Name:             "db",
 			ValidateClusters: makeBoolValue(true),
@@ -646,4 +736,24 @@ func runStep(t *testing.T, name string, fn func(t *testing.T)) {
 	if !t.Run(name, fn) {
 		t.FailNow()
 	}
+}
+
+func requireProtocolVersionGauge(
+	t *testing.T,
+	scenario *testServerScenario,
+	xdsVersion string,
+	expected int,
+) {
+	data := scenario.sink.Data()
+	require.Len(t, data, 1)
+
+	item := data[0]
+	require.Len(t, item.Gauges, 1)
+
+	val, ok := item.Gauges["consul.xds.test.xds.server.streams;version="+xdsVersion]
+	require.True(t, ok)
+
+	require.Equal(t, "consul.xds.test.xds.server.streams", val.Name)
+	require.Equal(t, expected, int(val.Value))
+	require.Equal(t, []metrics.Label{{Name: "version", Value: xdsVersion}}, val.Labels)
 }

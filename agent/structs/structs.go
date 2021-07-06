@@ -159,6 +159,12 @@ const (
 	// we multiply by time.Second
 	lockDelayMinThreshold = 1000
 
+	// JitterFraction is a the limit to the amount of jitter we apply
+	// to a user specified MaxQueryTime. We divide the specified time by
+	// the fraction. So 16 == 6.25% limit of jitter. This same fraction
+	// is applied to the RPCHoldTimeout
+	JitterFraction = 16
+
 	// WildcardSpecifier is the string which should be used for specifying a wildcard
 	// The exact semantics of the wildcard is left up to the code where its used.
 	WildcardSpecifier = "*"
@@ -193,6 +199,7 @@ type RPCInfo interface {
 	AllowStaleRead() bool
 	TokenSecret() string
 	SetTokenSecret(string)
+	HasTimedOut(since time.Time, rpcHoldTimeout, maxQueryTime, defaultQueryTime time.Duration) bool
 }
 
 // QueryOptions is used to specify various flags for read queries
@@ -291,6 +298,20 @@ func (q *QueryOptions) SetTokenSecret(s string) {
 	q.Token = s
 }
 
+func (q QueryOptions) HasTimedOut(start time.Time, rpcHoldTimeout, maxQueryTime, defaultQueryTime time.Duration) bool {
+	if q.MinQueryIndex > 0 {
+		if q.MaxQueryTime > maxQueryTime {
+			q.MaxQueryTime = maxQueryTime
+		} else if q.MaxQueryTime <= 0 {
+			q.MaxQueryTime = defaultQueryTime
+		}
+		q.MaxQueryTime += lib.RandomStagger(q.MaxQueryTime / JitterFraction)
+
+		return time.Since(start) > (q.MaxQueryTime + rpcHoldTimeout)
+	}
+	return time.Since(start) > rpcHoldTimeout
+}
+
 type WriteRequest struct {
 	// Token is the ACL token ID. If not provided, the 'anonymous'
 	// token is assumed for backwards compatibility.
@@ -312,6 +333,28 @@ func (w WriteRequest) TokenSecret() string {
 
 func (w *WriteRequest) SetTokenSecret(s string) {
 	w.Token = s
+}
+
+func (w WriteRequest) HasTimedOut(start time.Time, rpcHoldTimeout, maxQueryTime, defaultQueryTime time.Duration) bool {
+	return time.Since(start) > rpcHoldTimeout
+}
+
+type QueryBackend int
+
+const (
+	QueryBackendBlocking QueryBackend = iota
+	QueryBackendStreaming
+)
+
+func (q QueryBackend) String() string {
+	switch q {
+	case QueryBackendBlocking:
+		return "blocking-query"
+	case QueryBackendStreaming:
+		return "streaming"
+	default:
+		return ""
+	}
 }
 
 // QueryMeta allows a query response to include potentially
@@ -338,6 +381,9 @@ type QueryMeta struct {
 	// When NotModified is true, the response will not contain the result of
 	// the query.
 	NotModified bool
+
+	// Backend used to handle this query, either blocking-query or streaming.
+	Backend QueryBackend
 }
 
 // RegisterRequest is used for the Catalog.Register endpoint
@@ -617,6 +663,7 @@ func (r *ServiceSpecificRequest) CacheInfo() cache.RequestInfo {
 		r.Filter,
 		r.EnterpriseMeta,
 		r.Ingress,
+		r.ServiceKind,
 	}, nil)
 	if err == nil {
 		// If there is an error, we don't set the key. A blank key forces
@@ -1204,17 +1251,12 @@ func (s *NodeService) Validate() error {
 			}
 			bindAddrs[addr] = struct{}{}
 		}
-		var knownPaths = make(map[string]bool)
+
 		var knownListeners = make(map[int]bool)
 		for _, path := range s.Proxy.Expose.Paths {
 			if path.Path == "" {
 				result = multierror.Append(result, fmt.Errorf("expose.paths: empty path exposed"))
 			}
-
-			if seen := knownPaths[path.Path]; seen {
-				result = multierror.Append(result, fmt.Errorf("expose.paths: duplicate paths exposed"))
-			}
-			knownPaths[path.Path] = true
 
 			if seen := knownListeners[path.ListenerPort]; seen {
 				result = multierror.Append(result, fmt.Errorf("expose.paths: duplicate listener ports exposed"))
@@ -1400,7 +1442,7 @@ type NodeServiceList struct {
 	Services []*NodeService
 }
 
-// HealthCheck represents a single check on a given node
+// HealthCheck represents a single check on a given node.
 type HealthCheck struct {
 	Node        string
 	CheckID     types.CheckID // Unique per-node ID
@@ -1412,6 +1454,10 @@ type HealthCheck struct {
 	ServiceName string        // optional service name
 	ServiceTags []string      // optional service tags
 	Type        string        // Check type: http/ttl/tcp/etc
+
+	// ExposedPort is the port of the exposed Envoy listener representing the
+	// HTTP or GRPC health check of the service.
+	ExposedPort int
 
 	Definition HealthCheckDefinition `bexpr:"-"`
 

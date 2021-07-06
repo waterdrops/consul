@@ -42,7 +42,8 @@ func (c *Client) ServiceNodes(
 		if err != nil {
 			return structs.IndexedCheckServiceNodes{}, cache.ResultMeta{}, err
 		}
-		return *result.Value.(*structs.IndexedCheckServiceNodes), cache.ResultMeta{Index: result.Index}, err
+		meta := cache.ResultMeta{Index: result.Index, Hit: result.Cached}
+		return *result.Value.(*structs.IndexedCheckServiceNodes), meta, err
 	}
 
 	out, md, err := c.getServiceNodes(ctx, req)
@@ -126,7 +127,7 @@ func (r serviceRequest) CacheInfo() cache.RequestInfo {
 }
 
 func (r serviceRequest) Type() string {
-	return "service-health"
+	return "agent.rpcclient.health.serviceRequest"
 }
 
 func (r serviceRequest) NewMaterializer() (*submatview.Materializer, error) {

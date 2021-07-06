@@ -84,6 +84,11 @@ const (
 type TransparentProxyConfig struct {
 	// The port of the listener where outbound application traffic is being redirected to.
 	OutboundListenerPort int `json:",omitempty" alias:"outbound_listener_port"`
+
+	// DialedDirectly indicates whether transparent proxies can dial this proxy instance directly.
+	// The discovery chain is not considered when dialing a service instance directly.
+	// This setting is useful when addressing stateful services, such as a database cluster with a leader node.
+	DialedDirectly bool `json:",omitempty" alias:"dialed_directly"`
 }
 
 // ExposeConfig describes HTTP paths to expose through Envoy outside of Connect.
@@ -402,7 +407,7 @@ func (conf *ConfigEntries) Get(kind string, name string, q *QueryOptions) (Confi
 		return nil, nil, err
 	}
 
-	defer resp.Body.Close()
+	defer closeResponseBody(resp)
 
 	qm := &QueryMeta{}
 	parseQueryMeta(resp, qm)
@@ -427,7 +432,7 @@ func (conf *ConfigEntries) List(kind string, q *QueryOptions) ([]ConfigEntry, *Q
 		return nil, nil, err
 	}
 
-	defer resp.Body.Close()
+	defer closeResponseBody(resp)
 
 	qm := &QueryMeta{}
 	parseQueryMeta(resp, qm)
@@ -465,7 +470,7 @@ func (conf *ConfigEntries) set(entry ConfigEntry, params map[string]string, w *W
 	if err != nil {
 		return false, nil, err
 	}
-	defer resp.Body.Close()
+	defer closeResponseBody(resp)
 
 	var buf bytes.Buffer
 	if _, err := io.Copy(&buf, resp.Body); err != nil {
@@ -488,7 +493,7 @@ func (conf *ConfigEntries) Delete(kind string, name string, w *WriteOptions) (*W
 	if err != nil {
 		return nil, err
 	}
-	resp.Body.Close()
+	closeResponseBody(resp)
 	wm := &WriteMeta{RequestTime: rtt}
 	return wm, nil
 }

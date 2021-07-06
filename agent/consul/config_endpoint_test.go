@@ -911,10 +911,13 @@ func TestConfigEntry_ResolveServiceConfig_TransparentProxy(t *testing.T) {
 			name: "from proxy-defaults",
 			entries: []structs.ConfigEntry{
 				&structs.ProxyConfigEntry{
-					Kind:             structs.ProxyDefaults,
-					Name:             structs.ProxyConfigGlobal,
-					Mode:             structs.ProxyModeTransparent,
-					TransparentProxy: structs.TransparentProxyConfig{OutboundListenerPort: 10101},
+					Kind: structs.ProxyDefaults,
+					Name: structs.ProxyConfigGlobal,
+					Mode: structs.ProxyModeTransparent,
+					TransparentProxy: structs.TransparentProxyConfig{
+						OutboundListenerPort: 10101,
+						DialedDirectly:       true,
+					},
 				},
 			},
 			request: structs.ServiceConfigRequest{
@@ -922,8 +925,11 @@ func TestConfigEntry_ResolveServiceConfig_TransparentProxy(t *testing.T) {
 				Datacenter: "dc1",
 			},
 			expect: structs.ServiceConfigResponse{
-				Mode:             structs.ProxyModeTransparent,
-				TransparentProxy: structs.TransparentProxyConfig{OutboundListenerPort: 10101},
+				Mode: structs.ProxyModeTransparent,
+				TransparentProxy: structs.TransparentProxyConfig{
+					OutboundListenerPort: 10101,
+					DialedDirectly:       true,
+				},
 			},
 		},
 		{
@@ -949,16 +955,22 @@ func TestConfigEntry_ResolveServiceConfig_TransparentProxy(t *testing.T) {
 			name: "service-defaults overrides proxy-defaults",
 			entries: []structs.ConfigEntry{
 				&structs.ProxyConfigEntry{
-					Kind:             structs.ProxyDefaults,
-					Name:             structs.ProxyConfigGlobal,
-					Mode:             structs.ProxyModeDirect,
-					TransparentProxy: structs.TransparentProxyConfig{OutboundListenerPort: 10101},
+					Kind: structs.ProxyDefaults,
+					Name: structs.ProxyConfigGlobal,
+					Mode: structs.ProxyModeDirect,
+					TransparentProxy: structs.TransparentProxyConfig{
+						OutboundListenerPort: 10101,
+						DialedDirectly:       false,
+					},
 				},
 				&structs.ServiceConfigEntry{
-					Kind:             structs.ServiceDefaults,
-					Name:             "foo",
-					Mode:             structs.ProxyModeTransparent,
-					TransparentProxy: structs.TransparentProxyConfig{OutboundListenerPort: 808},
+					Kind: structs.ServiceDefaults,
+					Name: "foo",
+					Mode: structs.ProxyModeTransparent,
+					TransparentProxy: structs.TransparentProxyConfig{
+						OutboundListenerPort: 808,
+						DialedDirectly:       true,
+					},
 				},
 			},
 			request: structs.ServiceConfigRequest{
@@ -966,8 +978,11 @@ func TestConfigEntry_ResolveServiceConfig_TransparentProxy(t *testing.T) {
 				Datacenter: "dc1",
 			},
 			expect: structs.ServiceConfigResponse{
-				Mode:             structs.ProxyModeTransparent,
-				TransparentProxy: structs.TransparentProxyConfig{OutboundListenerPort: 808},
+				Mode: structs.ProxyModeTransparent,
+				TransparentProxy: structs.TransparentProxyConfig{
+					OutboundListenerPort: 808,
+					DialedDirectly:       true,
+				},
 			},
 		},
 	}
@@ -1303,8 +1318,11 @@ func TestConfigEntry_ResolveServiceConfig_Upstreams(t *testing.T) {
 					},
 
 					// TransparentProxy on the config entry but not the config request
-					Mode:             structs.ProxyModeTransparent,
-					TransparentProxy: structs.TransparentProxyConfig{OutboundListenerPort: 10101},
+					Mode: structs.ProxyModeTransparent,
+					TransparentProxy: structs.TransparentProxyConfig{
+						OutboundListenerPort: 10101,
+						DialedDirectly:       true,
+					},
 				},
 			},
 			request: structs.ServiceConfigRequest{
@@ -1314,8 +1332,11 @@ func TestConfigEntry_ResolveServiceConfig_Upstreams(t *testing.T) {
 				// Empty Upstreams/UpstreamIDs
 			},
 			expect: structs.ServiceConfigResponse{
-				Mode:             structs.ProxyModeTransparent,
-				TransparentProxy: structs.TransparentProxyConfig{OutboundListenerPort: 10101},
+				Mode: structs.ProxyModeTransparent,
+				TransparentProxy: structs.TransparentProxyConfig{
+					OutboundListenerPort: 10101,
+					DialedDirectly:       true,
+				},
 				UpstreamIDConfigs: structs.OpaqueUpstreamConfigs{
 					{
 						Upstream: wildcard,
@@ -1420,6 +1441,9 @@ func TestConfigEntry_ResolveServiceConfig_Blocking(t *testing.T) {
 	// of the blocking query does NOT bleed over into the next run. Concretely
 	// in this test the data present in the initial proxy-defaults should not
 	// be present when we are woken up due to proxy-defaults being deleted.
+	//
+	// This test does not pertain to upstreams, see:
+	// TestConfigEntry_ResolveServiceConfig_Upstreams_Blocking
 
 	state := s1.fsm.State()
 	require.NoError(state.EnsureConfigEntry(1, &structs.ProxyConfigEntry{
@@ -1569,6 +1593,205 @@ func TestConfigEntry_ResolveServiceConfig_Blocking(t *testing.T) {
 		}
 		require.Equal(expected, out)
 	}
+}
+
+func TestConfigEntry_ResolveServiceConfig_Upstreams_Blocking(t *testing.T) {
+	if testing.Short() {
+		t.Skip("too slow for testing.Short")
+	}
+
+	t.Parallel()
+
+	dir1, s1 := testServer(t)
+	defer os.RemoveAll(dir1)
+	defer s1.Shutdown()
+	codec := rpcClient(t, s1)
+	defer codec.Close()
+
+	// The main thing this should test is that information from one iteration
+	// of the blocking query does NOT bleed over into the next run. Concretely
+	// in this test the data present in the initial proxy-defaults should not
+	// be present when we are woken up due to proxy-defaults being deleted.
+	//
+	// This test is about fields in upstreams, see:
+	// TestConfigEntry_ResolveServiceConfig_Blocking
+
+	state := s1.fsm.State()
+	require.NoError(t, state.EnsureConfigEntry(1, &structs.ServiceConfigEntry{
+		Kind:     structs.ServiceDefaults,
+		Name:     "foo",
+		Protocol: "http",
+	}))
+	require.NoError(t, state.EnsureConfigEntry(2, &structs.ServiceConfigEntry{
+		Kind:     structs.ServiceDefaults,
+		Name:     "bar",
+		Protocol: "http",
+	}))
+
+	var index uint64
+
+	runStep(t, "foo and bar should be both http", func(t *testing.T) {
+		// Verify that we get the results of service-defaults for 'foo' and 'bar'.
+		var out structs.ServiceConfigResponse
+		require.NoError(t, msgpackrpc.CallWithCodec(codec, "ConfigEntry.ResolveServiceConfig",
+			&structs.ServiceConfigRequest{
+				Name:       "foo",
+				Datacenter: "dc1",
+				UpstreamIDs: []structs.ServiceID{
+					structs.NewServiceID("bar", nil),
+					structs.NewServiceID("other", nil),
+				},
+			},
+			&out,
+		))
+
+		expected := structs.ServiceConfigResponse{
+			ProxyConfig: map[string]interface{}{
+				"protocol": "http",
+			},
+			UpstreamIDConfigs: []structs.OpaqueUpstreamConfig{
+				{
+					Upstream: structs.NewServiceID("bar", nil),
+					Config: map[string]interface{}{
+						"protocol": "http",
+					},
+				},
+			},
+			QueryMeta: out.QueryMeta, // don't care
+		}
+
+		require.Equal(t, expected, out)
+		index = out.Index
+	})
+
+	runStep(t, "blocking query for foo wakes on bar entry delete", func(t *testing.T) {
+		// Now setup a blocking query for 'foo' while we erase the
+		// service-defaults for bar.
+
+		// Async cause a change
+		start := time.Now()
+		go func() {
+			time.Sleep(100 * time.Millisecond)
+			err := state.DeleteConfigEntry(index+1,
+				structs.ServiceDefaults,
+				"bar",
+				nil,
+			)
+			if err != nil {
+				t.Errorf("delete config entry failed: %v", err)
+			}
+		}()
+
+		// Re-run the query
+		var out structs.ServiceConfigResponse
+		require.NoError(t, msgpackrpc.CallWithCodec(codec, "ConfigEntry.ResolveServiceConfig",
+			&structs.ServiceConfigRequest{
+				Name:       "foo",
+				Datacenter: "dc1",
+				UpstreamIDs: []structs.ServiceID{
+					structs.NewServiceID("bar", nil),
+					structs.NewServiceID("other", nil),
+				},
+				QueryOptions: structs.QueryOptions{
+					MinQueryIndex: index,
+					MaxQueryTime:  time.Second,
+				},
+			},
+			&out,
+		))
+
+		// Should block at least 100ms
+		require.True(t, time.Since(start) >= 100*time.Millisecond, "too fast")
+
+		// Check the indexes
+		require.Equal(t, out.Index, index+1)
+
+		expected := structs.ServiceConfigResponse{
+			ProxyConfig: map[string]interface{}{
+				"protocol": "http",
+			},
+			QueryMeta: out.QueryMeta, // don't care
+		}
+
+		require.Equal(t, expected, out)
+		index = out.Index
+	})
+
+	runStep(t, "foo should be http and bar should be unset", func(t *testing.T) {
+		// Verify that we get the results of service-defaults for just 'foo'.
+		var out structs.ServiceConfigResponse
+		require.NoError(t, msgpackrpc.CallWithCodec(codec, "ConfigEntry.ResolveServiceConfig",
+			&structs.ServiceConfigRequest{
+				Name:       "foo",
+				Datacenter: "dc1",
+				UpstreamIDs: []structs.ServiceID{
+					structs.NewServiceID("bar", nil),
+					structs.NewServiceID("other", nil),
+				},
+			},
+			&out,
+		))
+
+		expected := structs.ServiceConfigResponse{
+			ProxyConfig: map[string]interface{}{
+				"protocol": "http",
+			},
+			QueryMeta: out.QueryMeta, // don't care
+		}
+
+		require.Equal(t, expected, out)
+		index = out.Index
+	})
+
+	runStep(t, "blocking query for foo wakes on foo entry delete", func(t *testing.T) {
+		// Now setup a blocking query for 'foo' while we erase the
+		// service-defaults for foo.
+
+		// Async cause a change
+		start := time.Now()
+		go func() {
+			time.Sleep(100 * time.Millisecond)
+			err := state.DeleteConfigEntry(index+1,
+				structs.ServiceDefaults,
+				"foo",
+				nil,
+			)
+			if err != nil {
+				t.Errorf("delete config entry failed: %v", err)
+			}
+		}()
+
+		// Re-run the query
+		var out structs.ServiceConfigResponse
+		require.NoError(t, msgpackrpc.CallWithCodec(codec, "ConfigEntry.ResolveServiceConfig",
+			&structs.ServiceConfigRequest{
+				Name:       "foo",
+				Datacenter: "dc1",
+				UpstreamIDs: []structs.ServiceID{
+					structs.NewServiceID("bar", nil),
+					structs.NewServiceID("other", nil),
+				},
+				QueryOptions: structs.QueryOptions{
+					MinQueryIndex: index,
+					MaxQueryTime:  time.Second,
+				},
+			},
+			&out,
+		))
+
+		// Should block at least 100ms
+		require.True(t, time.Since(start) >= 100*time.Millisecond, "too fast")
+
+		// Check the indexes
+		require.Equal(t, out.Index, index+1)
+
+		expected := structs.ServiceConfigResponse{
+			QueryMeta: out.QueryMeta, // don't care
+		}
+
+		require.Equal(t, expected, out)
+		index = out.Index
+	})
 }
 
 func TestConfigEntry_ResolveServiceConfig_UpstreamProxyDefaultsProtocol(t *testing.T) {
@@ -1847,4 +2070,11 @@ func TestConfigEntry_ProxyDefaultsExposeConfig(t *testing.T) {
 	proxyConf, ok := entry.(*structs.ProxyConfigEntry)
 	require.True(t, ok)
 	require.Equal(t, expose, proxyConf.Expose)
+}
+
+func runStep(t *testing.T, name string, fn func(t *testing.T)) {
+	t.Helper()
+	if !t.Run(name, fn) {
+		t.FailNow()
+	}
 }

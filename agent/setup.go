@@ -11,7 +11,6 @@ import (
 	"github.com/armon/go-metrics/prometheus"
 	"github.com/hashicorp/go-hclog"
 	"google.golang.org/grpc/grpclog"
-	grpcresolver "google.golang.org/grpc/resolver"
 
 	autoconf "github.com/hashicorp/consul/agent/auto-config"
 	"github.com/hashicorp/consul/agent/cache"
@@ -26,6 +25,7 @@ import (
 	"github.com/hashicorp/consul/agent/router"
 	"github.com/hashicorp/consul/agent/submatview"
 	"github.com/hashicorp/consul/agent/token"
+	"github.com/hashicorp/consul/agent/xds"
 	"github.com/hashicorp/consul/ipaddr"
 	"github.com/hashicorp/consul/lib"
 	"github.com/hashicorp/consul/logging"
@@ -104,20 +104,29 @@ func NewBaseDeps(configLoader ConfigLoader, logOut io.Writer) (BaseDeps, error) 
 	d.ConnPool = newConnPool(cfg, d.Logger, d.TLSConfigurator)
 
 	builder := resolver.NewServerResolverBuilder(resolver.Config{})
-	registerWithGRPC(builder)
+	resolver.Register(builder)
 	d.GRPCConnPool = grpc.NewClientConnPool(builder, grpc.TLSWrapper(d.TLSConfigurator.OutgoingRPCWrapper()), d.TLSConfigurator.UseTLS)
 
 	d.Router = router.NewRouter(d.Logger, cfg.Datacenter, fmt.Sprintf("%s.%s", cfg.NodeName, cfg.Datacenter), builder)
 
-	acConf := autoconf.Config{
-		DirectRPC:       d.ConnPool,
-		Logger:          d.Logger,
-		Loader:          configLoader,
-		ServerProvider:  d.Router,
-		TLSConfigurator: d.TLSConfigurator,
-		Cache:           d.Cache,
-		Tokens:          d.Tokens,
+	// this needs to happen prior to creating auto-config as some of the dependencies
+	// must also be passed to auto-config
+	d, err = initEnterpriseBaseDeps(d, cfg)
+	if err != nil {
+		return d, err
 	}
+
+	acConf := autoconf.Config{
+		DirectRPC:        d.ConnPool,
+		Logger:           d.Logger,
+		Loader:           configLoader,
+		ServerProvider:   d.Router,
+		TLSConfigurator:  d.TLSConfigurator,
+		Cache:            d.Cache,
+		Tokens:           d.Tokens,
+		EnterpriseConfig: initEnterpriseAutoConfig(d.EnterpriseDeps, cfg),
+	}
+
 	d.AutoConfig, err = autoconf.New(acConf)
 	if err != nil {
 		return d, err
@@ -159,19 +168,6 @@ func newConnPool(config *config.RuntimeConfig, logger hclog.Logger, tls *tlsutil
 	return pool
 }
 
-var registerLock sync.Mutex
-
-// registerWithGRPC registers the grpc/resolver.Builder as a grpc/resolver.
-// This function exists to synchronize registrations with a lock.
-// grpc/resolver.Register expects all registration to happen at init and does
-// not allow for concurrent registration. This function exists to support
-// parallel testing.
-func registerWithGRPC(b grpcresolver.Builder) {
-	registerLock.Lock()
-	defer registerLock.Unlock()
-	grpcresolver.Register(b)
-}
-
 // getPrometheusDefs reaches into every slice of prometheus defs we've defined in each part of the agent, and appends
 //  all of our slices into one nice slice of definitions per metric type for the Consul agent to pass to go-metrics.
 func getPrometheusDefs(cfg lib.TelemetryConfig) ([]prometheus.GaugeDefinition, []prometheus.CounterDefinition, []prometheus.SummaryDefinition) {
@@ -195,8 +191,10 @@ func getPrometheusDefs(cfg lib.TelemetryConfig) ([]prometheus.GaugeDefinition, [
 		consul.RPCGauges,
 		consul.SessionGauges,
 		grpc.StatsGauges,
+		xds.StatsGauges,
 		usagemetrics.Gauges,
 		consul.ReplicationGauges,
+		consul.CertExpirationGauges,
 		Gauges,
 		raftGauges,
 	}

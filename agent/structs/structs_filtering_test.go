@@ -9,7 +9,7 @@ import (
 	"sync"
 	"testing"
 
-	bexpr "github.com/hashicorp/go-bexpr"
+	"github.com/hashicorp/go-bexpr"
 	"github.com/mitchellh/pointerstructure"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -100,6 +100,11 @@ var expectedFieldConfigTransparentProxyConfig bexpr.FieldConfigurations = bexpr.
 	"OutboundListenerPort": &bexpr.FieldConfiguration{
 		StructFieldName:     "OutboundListenerPort",
 		CoerceFn:            bexpr.CoerceInt,
+		SupportedOperations: []bexpr.MatchOperator{bexpr.MatchEqual, bexpr.MatchNotEqual},
+	},
+	"DialedDirectly": &bexpr.FieldConfiguration{
+		StructFieldName:     "DialedDirectly",
+		CoerceFn:            bexpr.CoerceBool,
 		SupportedOperations: []bexpr.MatchOperator{bexpr.MatchEqual, bexpr.MatchNotEqual},
 	},
 }
@@ -544,6 +549,11 @@ var expectedFieldConfigHealthCheck bexpr.FieldConfigurations = bexpr.FieldConfig
 		CoerceFn:            bexpr.CoerceString,
 		SupportedOperations: []bexpr.MatchOperator{bexpr.MatchEqual, bexpr.MatchNotEqual, bexpr.MatchIn, bexpr.MatchNotIn, bexpr.MatchMatches, bexpr.MatchNotMatches},
 		StructFieldName:     "Type",
+	},
+	"ExposedPort": &bexpr.FieldConfiguration{
+		CoerceFn:            bexpr.CoerceInt,
+		SupportedOperations: []bexpr.MatchOperator{bexpr.MatchEqual, bexpr.MatchNotEqual},
+		StructFieldName:     "ExposedPort",
 	},
 }
 

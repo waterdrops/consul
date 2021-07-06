@@ -14,6 +14,8 @@ import (
 	testinf "github.com/mitchellh/go-testing-interface"
 	"github.com/stretchr/testify/require"
 
+	"github.com/hashicorp/consul/agent/connect"
+	"github.com/hashicorp/consul/agent/consul/discoverychain"
 	"github.com/hashicorp/consul/agent/proxycfg"
 	"github.com/hashicorp/consul/agent/structs"
 	"github.com/hashicorp/consul/agent/xds/proxysupport"
@@ -642,11 +644,65 @@ func TestClustersFromSnapshot(t *testing.T) {
 			create: proxycfg.TestConfigSnapshot,
 			setup: func(snap *proxycfg.ConfigSnapshot) {
 				snap.Proxy.Mode = structs.ProxyModeTransparent
+				snap.ConnectProxy.MeshConfigSet = true
+			},
+		},
+		{
+			name:   "transparent-proxy-catalog-destinations-only",
+			create: proxycfg.TestConfigSnapshot,
+			setup: func(snap *proxycfg.ConfigSnapshot) {
+				snap.Proxy.Mode = structs.ProxyModeTransparent
 
 				snap.ConnectProxy.MeshConfigSet = true
 				snap.ConnectProxy.MeshConfig = &structs.MeshConfigEntry{
 					TransparentProxy: structs.TransparentProxyMeshConfig{
-						CatalogDestinationsOnly: false,
+						MeshDestinationsOnly: true,
+					},
+				}
+			},
+		},
+		{
+			name:   "transparent-proxy-dial-instances-directly",
+			create: proxycfg.TestConfigSnapshot,
+			setup: func(snap *proxycfg.ConfigSnapshot) {
+				snap.Proxy.Mode = structs.ProxyModeTransparent
+
+				// We add a passthrough cluster for each upstream service name
+				snap.ConnectProxy.PassthroughUpstreams = map[string]proxycfg.ServicePassthroughAddrs{
+					"default/kafka": {
+						SNI: "kafka.default.dc1.internal.e5b08d03-bfc3-c870-1833-baddb116e648.consul",
+						Addrs: map[string]struct{}{
+							"9.9.9.9": {},
+						},
+					},
+					"default/mongo": {
+						SNI: "mongo.default.dc1.internal.e5b08d03-bfc3-c870-1833-baddb116e648.consul",
+						Addrs: map[string]struct{}{
+							"10.10.10.10": {},
+							"10.10.10.12": {},
+						},
+					},
+				}
+
+				// There should still be a cluster for non-passthrough requests
+				snap.ConnectProxy.DiscoveryChain["mongo"] = discoverychain.TestCompileConfigEntries(
+					t, "mongo", "default", "dc1",
+					connect.TestClusterID+".consul", "dc1", nil)
+				snap.ConnectProxy.WatchedUpstreamEndpoints["mongo"] = map[string]structs.CheckServiceNodes{
+					"mongo.default.dc1": {
+						structs.CheckServiceNode{
+							Node: &structs.Node{
+								Datacenter: "dc1",
+							},
+							Service: &structs.NodeService{
+								Service: "mongo",
+								Address: "7.7.7.7",
+								Port:    27017,
+								TaggedAddresses: map[string]structs.ServiceAddress{
+									"virtual": {Address: "6.6.6.6"},
+								},
+							},
+						},
 					},
 				}
 			},

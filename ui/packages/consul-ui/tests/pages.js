@@ -157,13 +157,23 @@ export default {
     )
   ),
   service: create(
-    service(visitable, clickable, attribute, collection, text, consulIntentionList, tabgroup)
+    service(
+      visitable,
+      clickable,
+      attribute,
+      isPresent,
+      collection,
+      text,
+      consulIntentionList,
+      tabgroup
+    )
   ),
   instance: create(
     instance(
       visitable,
       alias,
       attribute,
+      isPresent,
       collection,
       text,
       tabgroup,
@@ -177,7 +187,9 @@ export default {
       visitable,
       deletable,
       clickable,
+      alias,
       attribute,
+      isPresent,
       collection,
       tabgroup,
       text,

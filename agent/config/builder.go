@@ -332,9 +332,11 @@ func (b *builder) Build() (rt RuntimeConfig, err error) {
 
 		var unusedErr error
 		for _, k := range md.Unused {
-			switch k {
-			case "acl_enforce_version_8":
+			switch {
+			case k == "acl_enforce_version_8":
 				b.warn("config key %q is deprecated and should be removed", k)
+			case strings.HasPrefix(k, "audit.sink[") && strings.HasSuffix(k, "].name"):
+				b.warn("config key audit.sink[].name is deprecated and should be removed")
 			default:
 				unusedErr = multierror.Append(unusedErr, fmt.Errorf("invalid config key %s", k))
 			}
@@ -667,7 +669,6 @@ func (b *builder) Build() (rt RuntimeConfig, err error) {
 
 	// autoEncrypt and autoConfig implicitly turns on connect which is why
 	// they need to be above other settings that rely on connect.
-	autoEncryptTLS := boolVal(c.AutoEncrypt.TLS)
 	autoEncryptDNSSAN := []string{}
 	for _, d := range c.AutoEncrypt.DNSSAN {
 		autoEncryptDNSSAN = append(autoEncryptDNSSAN, d)
@@ -683,13 +684,8 @@ func (b *builder) Build() (rt RuntimeConfig, err error) {
 
 	}
 	autoEncryptAllowTLS := boolVal(c.AutoEncrypt.AllowTLS)
-
-	if autoEncryptAllowTLS {
-		connectEnabled = true
-	}
-
 	autoConfig := b.autoConfigVal(c.AutoConfig)
-	if autoConfig.Enabled {
+	if autoEncryptAllowTLS || autoConfig.Enabled {
 		connectEnabled = true
 	}
 
@@ -982,7 +978,7 @@ func (b *builder) Build() (rt RuntimeConfig, err error) {
 		Checks:                                 checks,
 		ClientAddrs:                            clientAddrs,
 		ConfigEntryBootstrap:                   configEntries,
-		AutoEncryptTLS:                         autoEncryptTLS,
+		AutoEncryptTLS:                         boolVal(c.AutoEncrypt.TLS),
 		AutoEncryptDNSSAN:                      autoEncryptDNSSAN,
 		AutoEncryptIPSAN:                       autoEncryptIPSAN,
 		AutoEncryptAllowTLS:                    autoEncryptAllowTLS,
@@ -1764,6 +1760,7 @@ func (b *builder) transparentProxyConfVal(tproxyConf *TransparentProxyConfig) st
 	}
 
 	out.OutboundListenerPort = intVal(tproxyConf.OutboundListenerPort)
+	out.DialedDirectly = boolVal(tproxyConf.DialedDirectly)
 	return out
 }
 

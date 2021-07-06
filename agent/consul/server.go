@@ -43,6 +43,7 @@ import (
 	"github.com/hashicorp/consul/agent/structs"
 	"github.com/hashicorp/consul/agent/token"
 	"github.com/hashicorp/consul/lib"
+	"github.com/hashicorp/consul/lib/routine"
 	"github.com/hashicorp/consul/logging"
 	"github.com/hashicorp/consul/proto/pbsubscribe"
 	"github.com/hashicorp/consul/tlsutil"
@@ -101,6 +102,7 @@ const (
 	aclTokenReapingRoutineName            = "acl token reaping"
 	aclUpgradeRoutineName                 = "legacy ACL token upgrade"
 	caRootPruningRoutineName              = "CA root pruning"
+	caRootMetricRoutineName               = "CA root expiration metric"
 	configReplicationRoutineName          = "config entry replication"
 	federationStateReplicationRoutineName = "federation state replication"
 	federationStateAntiEntropyRoutineName = "federation state anti-entropy"
@@ -298,7 +300,7 @@ type Server struct {
 	dcSupportsIntentionsAsConfigEntries int32
 
 	// Manager to handle starting/stopping go routines when establishing/revoking raft leadership
-	leaderRoutineManager *LeaderRoutineManager
+	leaderRoutineManager *routine.Manager
 
 	// embedded struct to hold all the enterprise specific data
 	EnterpriseServer
@@ -375,7 +377,7 @@ func NewServer(config *Config, flat Deps) (*Server, error) {
 		tombstoneGC:             gc,
 		serverLookup:            NewServerLookup(),
 		shutdownCh:              shutdownCh,
-		leaderRoutineManager:    NewLeaderRoutineManager(logger),
+		leaderRoutineManager:    routine.NewManager(logger.Named(logging.Leader)),
 		aclAuthMethodValidators: authmethod.NewCache(),
 		fsm:                     newFSMFromConfig(flat.Logger, gc, config),
 	}
@@ -391,7 +393,7 @@ func NewServer(config *Config, flat Deps) (*Server, error) {
 	}
 
 	// Initialize enterprise specific server functionality
-	if err := s.initEnterprise(); err != nil {
+	if err := s.initEnterprise(flat); err != nil {
 		s.Shutdown()
 		return nil, err
 	}
@@ -568,7 +570,15 @@ func NewServer(config *Config, flat Deps) (*Server, error) {
 			WithStateProvider(s.fsm).
 			WithLogger(s.logger).
 			WithDatacenter(s.config.Datacenter).
-			WithReportingInterval(s.config.MetricsReportingInterval),
+			WithReportingInterval(s.config.MetricsReportingInterval).
+			WithGetMembersFunc(func() []serf.Member {
+				members, err := s.LANMembersAllSegments()
+				if err != nil {
+					return []serf.Member{}
+				}
+
+				return members
+			}),
 	)
 	if err != nil {
 		s.Shutdown()
@@ -1137,7 +1147,7 @@ func (s *Server) LANMembers() []serf.Member {
 	return s.serfLAN.Members()
 }
 
-// WANMembers is used to return the members of the LAN cluster
+// WANMembers is used to return the members of the WAN cluster
 func (s *Server) WANMembers() []serf.Member {
 	if s.serfWAN == nil {
 		return nil
@@ -1319,6 +1329,10 @@ func (s *Server) RegisterEndpoint(name string, handler interface{}) error {
 	return s.rpcServer.RegisterName(name, handler)
 }
 
+func (s *Server) FSM() *fsm.FSM {
+	return s.fsm
+}
+
 // Stats is used to return statistics for debugging and insight
 // for various sub-systems
 func (s *Server) Stats() map[string]map[string]string {
@@ -1351,16 +1365,6 @@ func (s *Server) Stats() map[string]map[string]string {
 
 	if s.serfWAN != nil {
 		stats["serf_wan"] = s.serfWAN.Stats()
-	}
-
-	for outerKey, outerValue := range s.enterpriseStats() {
-		if _, ok := stats[outerKey]; ok {
-			for innerKey, innerValue := range outerValue {
-				stats[outerKey][innerKey] = innerValue
-			}
-		} else {
-			stats[outerKey] = outerValue
-		}
 	}
 
 	return stats

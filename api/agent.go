@@ -63,6 +63,7 @@ type AgentCheck struct {
 	ServiceID   string
 	ServiceName string
 	Type        string
+	ExposedPort int
 	Definition  HealthCheckDefinition
 	Namespace   string `json:",omitempty"`
 }
@@ -437,7 +438,7 @@ func (a *Agent) Self() (map[string]map[string]interface{}, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer closeResponseBody(resp)
 
 	var out map[string]map[string]interface{}
 	if err := decodeBody(resp, &out); err != nil {
@@ -455,7 +456,7 @@ func (a *Agent) Host() (map[string]interface{}, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer closeResponseBody(resp)
 
 	var out map[string]interface{}
 	if err := decodeBody(resp, &out); err != nil {
@@ -472,7 +473,7 @@ func (a *Agent) Metrics() (*MetricsInfo, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer closeResponseBody(resp)
 
 	var out *MetricsInfo
 	if err := decodeBody(resp, &out); err != nil {
@@ -488,7 +489,7 @@ func (a *Agent) Reload() error {
 	if err != nil {
 		return err
 	}
-	resp.Body.Close()
+	closeResponseBody(resp)
 	return nil
 }
 
@@ -527,7 +528,7 @@ func (a *Agent) ChecksWithFilterOpts(filter string, q *QueryOptions) (map[string
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer closeResponseBody(resp)
 
 	var out map[string]*AgentCheck
 	if err := decodeBody(resp, &out); err != nil {
@@ -557,7 +558,7 @@ func (a *Agent) ServicesWithFilterOpts(filter string, q *QueryOptions) (map[stri
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer closeResponseBody(resp)
 
 	var out map[string]*AgentService
 	if err := decodeBody(resp, &out); err != nil {
@@ -580,7 +581,7 @@ func (a *Agent) AgentHealthServiceByID(serviceID string) (string, *AgentServiceC
 	if err != nil {
 		return "", nil, err
 	}
-	defer resp.Body.Close()
+	defer closeResponseBody(resp)
 	// Service not Found
 	if resp.StatusCode == http.StatusNotFound {
 		return HealthCritical, nil, nil
@@ -614,7 +615,7 @@ func (a *Agent) AgentHealthServiceByName(service string) (string, []AgentService
 	if err != nil {
 		return "", nil, err
 	}
-	defer resp.Body.Close()
+	defer closeResponseBody(resp)
 	// Service not Found
 	if resp.StatusCode == http.StatusNotFound {
 		return HealthCritical, nil, nil
@@ -647,7 +648,7 @@ func (a *Agent) Service(serviceID string, q *QueryOptions) (*AgentService, *Quer
 	if err != nil {
 		return nil, nil, err
 	}
-	defer resp.Body.Close()
+	defer closeResponseBody(resp)
 
 	qm := &QueryMeta{}
 	parseQueryMeta(resp, qm)
@@ -672,7 +673,7 @@ func (a *Agent) Members(wan bool) ([]*AgentMember, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer closeResponseBody(resp)
 
 	var out []*AgentMember
 	if err := decodeBody(resp, &out); err != nil {
@@ -694,7 +695,7 @@ func (a *Agent) MembersOpts(opts MembersOpts) ([]*AgentMember, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer closeResponseBody(resp)
 
 	var out []*AgentMember
 	if err := decodeBody(resp, &out); err != nil {
@@ -730,7 +731,7 @@ func (a *Agent) serviceRegister(service *AgentServiceRegistration, opts ServiceR
 	if err != nil {
 		return err
 	}
-	resp.Body.Close()
+	closeResponseBody(resp)
 	return nil
 }
 
@@ -742,7 +743,7 @@ func (a *Agent) ServiceDeregister(serviceID string) error {
 	if err != nil {
 		return err
 	}
-	resp.Body.Close()
+	closeResponseBody(resp)
 	return nil
 }
 
@@ -755,7 +756,7 @@ func (a *Agent) ServiceDeregisterOpts(serviceID string, q *QueryOptions) error {
 	if err != nil {
 		return err
 	}
-	resp.Body.Close()
+	closeResponseBody(resp)
 	return nil
 }
 
@@ -810,7 +811,7 @@ func (a *Agent) updateTTL(checkID, note, status string) error {
 	if err != nil {
 		return err
 	}
-	resp.Body.Close()
+	closeResponseBody(resp)
 	return nil
 }
 
@@ -860,7 +861,7 @@ func (a *Agent) UpdateTTLOpts(checkID, output, status string, q *QueryOptions) e
 	if err != nil {
 		return err
 	}
-	resp.Body.Close()
+	closeResponseBody(resp)
 	return nil
 }
 
@@ -873,7 +874,7 @@ func (a *Agent) CheckRegister(check *AgentCheckRegistration) error {
 	if err != nil {
 		return err
 	}
-	resp.Body.Close()
+	closeResponseBody(resp)
 	return nil
 }
 
@@ -892,7 +893,7 @@ func (a *Agent) CheckDeregisterOpts(checkID string, q *QueryOptions) error {
 	if err != nil {
 		return err
 	}
-	resp.Body.Close()
+	closeResponseBody(resp)
 	return nil
 }
 
@@ -907,7 +908,7 @@ func (a *Agent) Join(addr string, wan bool) error {
 	if err != nil {
 		return err
 	}
-	resp.Body.Close()
+	closeResponseBody(resp)
 	return nil
 }
 
@@ -918,7 +919,7 @@ func (a *Agent) Leave() error {
 	if err != nil {
 		return err
 	}
-	resp.Body.Close()
+	closeResponseBody(resp)
 	return nil
 }
 
@@ -929,7 +930,7 @@ func (a *Agent) ForceLeave(node string) error {
 	if err != nil {
 		return err
 	}
-	resp.Body.Close()
+	closeResponseBody(resp)
 	return nil
 }
 
@@ -942,7 +943,7 @@ func (a *Agent) ForceLeavePrune(node string) error {
 	if err != nil {
 		return err
 	}
-	resp.Body.Close()
+	closeResponseBody(resp)
 	return nil
 }
 
@@ -955,7 +956,7 @@ func (a *Agent) ConnectAuthorize(auth *AgentAuthorizeParams) (*AgentAuthorize, e
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer closeResponseBody(resp)
 
 	var out AgentAuthorize
 	if err := decodeBody(resp, &out); err != nil {
@@ -972,7 +973,7 @@ func (a *Agent) ConnectCARoots(q *QueryOptions) (*CARootList, *QueryMeta, error)
 	if err != nil {
 		return nil, nil, err
 	}
-	defer resp.Body.Close()
+	defer closeResponseBody(resp)
 
 	qm := &QueryMeta{}
 	parseQueryMeta(resp, qm)
@@ -993,7 +994,7 @@ func (a *Agent) ConnectCALeaf(serviceID string, q *QueryOptions) (*LeafCert, *Qu
 	if err != nil {
 		return nil, nil, err
 	}
-	defer resp.Body.Close()
+	defer closeResponseBody(resp)
 
 	qm := &QueryMeta{}
 	parseQueryMeta(resp, qm)
@@ -1016,7 +1017,7 @@ func (a *Agent) EnableServiceMaintenance(serviceID, reason string) error {
 	if err != nil {
 		return err
 	}
-	resp.Body.Close()
+	closeResponseBody(resp)
 	return nil
 }
 
@@ -1029,7 +1030,7 @@ func (a *Agent) DisableServiceMaintenance(serviceID string) error {
 	if err != nil {
 		return err
 	}
-	resp.Body.Close()
+	closeResponseBody(resp)
 	return nil
 }
 
@@ -1043,7 +1044,7 @@ func (a *Agent) EnableNodeMaintenance(reason string) error {
 	if err != nil {
 		return err
 	}
-	resp.Body.Close()
+	closeResponseBody(resp)
 	return nil
 }
 
@@ -1056,7 +1057,7 @@ func (a *Agent) DisableNodeMaintenance() error {
 	if err != nil {
 		return err
 	}
-	resp.Body.Close()
+	closeResponseBody(resp)
 	return nil
 }
 
@@ -1087,7 +1088,7 @@ func (a *Agent) monitor(loglevel string, logJSON bool, stopCh <-chan struct{}, q
 	}
 	logCh := make(chan string, 64)
 	go func() {
-		defer resp.Body.Close()
+		defer closeResponseBody(resp)
 		scanner := bufio.NewScanner(resp.Body)
 		for {
 			select {
@@ -1195,7 +1196,7 @@ func (a *Agent) updateTokenOnce(target, token string, q *WriteOptions) (*WriteMe
 	if err != nil {
 		return nil, 0, err
 	}
-	defer resp.Body.Close()
+	defer closeResponseBody(resp)
 
 	wm := &WriteMeta{RequestTime: rtt}
 

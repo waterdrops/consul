@@ -199,7 +199,7 @@ func TestAPI_ConfigEntries(t *testing.T) {
 
 	t.Run("Mesh", func(t *testing.T) {
 		mesh := &MeshConfigEntry{
-			TransparentProxy: TransparentProxyMeshConfig{CatalogDestinationsOnly: true},
+			TransparentProxy: TransparentProxyMeshConfig{MeshDestinationsOnly: true},
 			Meta: map[string]string{
 				"foo": "bar",
 				"gir": "zim",
@@ -358,7 +358,8 @@ func TestDecodeConfigEntry(t *testing.T) {
 				},
 				"Mode": "transparent",
 				"TransparentProxy": {
-					"OutboundListenerPort": 808
+					"OutboundListenerPort": 808,
+					"DialedDirectly": true
 				}
 			}
 			`,
@@ -379,8 +380,11 @@ func TestDecodeConfigEntry(t *testing.T) {
 				MeshGateway: MeshGatewayConfig{
 					Mode: MeshGatewayModeRemote,
 				},
-				Mode:             ProxyModeTransparent,
-				TransparentProxy: &TransparentProxyConfig{OutboundListenerPort: 808},
+				Mode: ProxyModeTransparent,
+				TransparentProxy: &TransparentProxyConfig{
+					OutboundListenerPort: 808,
+					DialedDirectly:       true,
+				},
 			},
 		},
 		{
@@ -400,7 +404,8 @@ func TestDecodeConfigEntry(t *testing.T) {
 				},
 				"Mode": "transparent",
 				"TransparentProxy": {
-					"OutboundListenerPort": 808
+					"OutboundListenerPort": 808,
+					"DialedDirectly": true
 				},
 				"UpstreamConfig": {
 					"Overrides": [
@@ -448,8 +453,11 @@ func TestDecodeConfigEntry(t *testing.T) {
 				MeshGateway: MeshGatewayConfig{
 					Mode: MeshGatewayModeRemote,
 				},
-				Mode:             ProxyModeTransparent,
-				TransparentProxy: &TransparentProxyConfig{OutboundListenerPort: 808},
+				Mode: ProxyModeTransparent,
+				TransparentProxy: &TransparentProxyConfig{
+					OutboundListenerPort: 808,
+					DialedDirectly:       true,
+				},
 				UpstreamConfig: &UpstreamConfiguration{
 					Overrides: []*UpstreamConfig{
 						{
@@ -1205,7 +1213,7 @@ func TestDecodeConfigEntry(t *testing.T) {
 					"gir": "zim"
 				},
 				"TransparentProxy": {
-					"CatalogDestinationsOnly": true
+					"MeshDestinationsOnly": true
 				}
 			}
 			`,
@@ -1215,7 +1223,7 @@ func TestDecodeConfigEntry(t *testing.T) {
 					"gir": "zim",
 				},
 				TransparentProxy: TransparentProxyMeshConfig{
-					CatalogDestinationsOnly: true,
+					MeshDestinationsOnly: true,
 				},
 			},
 		},

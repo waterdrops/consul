@@ -80,13 +80,16 @@ func (s *ResourceGenerator) listenersFromSnapshotConnectProxy(cfgSnap *proxycfg.
 		outboundListener.FilterChains = make([]*envoy_listener_v3.FilterChain, 0)
 		outboundListener.ListenerFilters = []*envoy_listener_v3.ListenerFilter{
 			{
-				// TODO (freddy): Hard-coded until we upgrade the go-control-plane library
+				// The original_dst filter is a listener filter that recovers the original destination
+				// address before the iptables redirection. This filter is needed for transparent
+				// proxies because they route to upstreams using filter chains that match on the
+				// destination IP address. If the filter is not present, no chain will match.
+				//
+				// TODO(tproxy): Hard-coded until we upgrade the go-control-plane library
 				Name: "envoy.filters.listener.original_dst",
 			},
 		}
 	}
-
-	var hasFilterChains bool
 
 	for id, chain := range cfgSnap.ConnectProxy.DiscoveryChain {
 		upstreamCfg := cfgSnap.ConnectProxy.UpstreamConfig[id]
@@ -162,53 +165,59 @@ func (s *ResourceGenerator) listenersFromSnapshotConnectProxy(cfgSnap *proxycfg.
 		// For every potential address we collected, create the appropriate address prefix to match on.
 		// In this case we are matching on exact addresses, so the prefix is the address itself,
 		// and the prefix length is based on whether it's IPv4 or IPv6.
-		ranges := make([]*envoy_core_v3.CidrRange, 0)
-
-		for addr := range uniqueAddrs {
-			ip := net.ParseIP(addr)
-			if ip == nil {
-				continue
-			}
-
-			pfxLen := uint32(32)
-			if ip.To4() == nil {
-				pfxLen = 128
-			}
-			ranges = append(ranges, &envoy_core_v3.CidrRange{
-				AddressPrefix: addr,
-				PrefixLen:     &wrappers.UInt32Value{Value: pfxLen},
-			})
-		}
-
-		// The match rules are stable sorted to avoid draining if the list is provided out of order
-		sort.SliceStable(ranges, func(i, j int) bool {
-			return ranges[i].AddressPrefix < ranges[j].AddressPrefix
-		})
-
-		filterChain.FilterChainMatch = &envoy_listener_v3.FilterChainMatch{
-			PrefixRanges: ranges,
-		}
+		filterChain.FilterChainMatch = makeFilterChainMatchFromAddrs(uniqueAddrs)
 
 		// Only attach the filter chain if there are addresses to match on
-		if len(ranges) > 0 {
+		if filterChain.FilterChainMatch != nil && len(filterChain.FilterChainMatch.PrefixRanges) > 0 {
 			outboundListener.FilterChains = append(outboundListener.FilterChains, filterChain)
 		}
-		hasFilterChains = true
 	}
 
-	// Only create the outbound listener when there are upstreams and filter chains are present
-	if outboundListener != nil && hasFilterChains {
-		// Filter chains are stable sorted to avoid draining if the list is provided out of order
-		sort.SliceStable(outboundListener.FilterChains, func(i, j int) bool {
-			return outboundListener.FilterChains[i].Name < outboundListener.FilterChains[j].Name
-		})
+	if outboundListener != nil {
+		// Add a passthrough for every mesh endpoint that can be dialed directly,
+		// as opposed to via a virtual IP.
+		var passthroughChains []*envoy_listener_v3.FilterChain
 
-		// Add a catch-all filter chain that acts as a TCP proxy to non-catalog destinations
-		if cfgSnap.ConnectProxy.MeshConfig == nil ||
-			!cfgSnap.ConnectProxy.MeshConfig.TransparentProxy.CatalogDestinationsOnly {
+		for svc, passthrough := range cfgSnap.ConnectProxy.PassthroughUpstreams {
+			sn := structs.ServiceNameFromString(svc)
+			u := structs.Upstream{
+				DestinationName:      sn.Name,
+				DestinationNamespace: sn.NamespaceOrDefault(),
+			}
 
 			filterChain, err := s.makeUpstreamFilterChainForDiscoveryChain(
-				"passthrough",
+				"",
+				"passthrough~"+passthrough.SNI,
+
+				// TODO(tproxy) This should use the protocol configured on the upstream's config entry
+				"tcp",
+				&u,
+				nil,
+				cfgSnap,
+				nil,
+			)
+			if err != nil {
+				return nil, err
+			}
+			filterChain.FilterChainMatch = makeFilterChainMatchFromAddrs(passthrough.Addrs)
+
+			passthroughChains = append(passthroughChains, filterChain)
+		}
+
+		outboundListener.FilterChains = append(outboundListener.FilterChains, passthroughChains...)
+
+		// Filter chains are stable sorted to avoid draining if the list is provided out of order
+		sort.SliceStable(outboundListener.FilterChains, func(i, j int) bool {
+			return outboundListener.FilterChains[i].FilterChainMatch.PrefixRanges[0].AddressPrefix <
+				outboundListener.FilterChains[j].FilterChainMatch.PrefixRanges[0].AddressPrefix
+		})
+
+		// Add a catch-all filter chain that acts as a TCP proxy to destinations outside the mesh
+		if cfgSnap.ConnectProxy.MeshConfig == nil ||
+			!cfgSnap.ConnectProxy.MeshConfig.TransparentProxy.MeshDestinationsOnly {
+
+			filterChain, err := s.makeUpstreamFilterChainForDiscoveryChain(
+				"",
 				OriginalDestinationClusterName,
 				"tcp",
 				nil,
@@ -222,7 +231,10 @@ func (s *ResourceGenerator) listenersFromSnapshotConnectProxy(cfgSnap *proxycfg.
 			outboundListener.FilterChains = append(outboundListener.FilterChains, filterChain)
 		}
 
-		resources = append(resources, outboundListener)
+		// Only add the outbound listener if configured.
+		if len(outboundListener.FilterChains) > 0 {
+			resources = append(resources, outboundListener)
+		}
 	}
 
 	// Looping over explicit upstreams is only needed for prepared queries because they do not have discovery chains
@@ -288,6 +300,35 @@ func (s *ResourceGenerator) listenersFromSnapshotConnectProxy(cfgSnap *proxycfg.
 	}
 
 	return resources, nil
+}
+
+func makeFilterChainMatchFromAddrs(addrs map[string]struct{}) *envoy_listener_v3.FilterChainMatch {
+	ranges := make([]*envoy_core_v3.CidrRange, 0)
+
+	for addr := range addrs {
+		ip := net.ParseIP(addr)
+		if ip == nil {
+			continue
+		}
+
+		pfxLen := uint32(32)
+		if ip.To4() == nil {
+			pfxLen = 128
+		}
+		ranges = append(ranges, &envoy_core_v3.CidrRange{
+			AddressPrefix: addr,
+			PrefixLen:     &wrappers.UInt32Value{Value: pfxLen},
+		})
+	}
+
+	// The match rules are stable sorted to avoid draining if the list is provided out of order
+	sort.SliceStable(ranges, func(i, j int) bool {
+		return ranges[i].AddressPrefix < ranges[j].AddressPrefix
+	})
+
+	return &envoy_listener_v3.FilterChainMatch{
+		PrefixRanges: ranges,
+	}
 }
 
 func parseCheckPath(check structs.CheckType) (structs.ExposePath, error) {
@@ -495,7 +536,7 @@ func (s *ResourceGenerator) makeIngressGatewayListeners(address string, cfgSnap 
 				filterName:      listenerKey.RouteName(),
 				routeName:       listenerKey.RouteName(),
 				cluster:         "",
-				statPrefix:      "ingress_upstream.",
+				statPrefix:      "ingress_upstream_",
 				routePath:       "",
 				httpAuthzFilter: nil,
 			}
@@ -621,6 +662,51 @@ const (
 	httpConnectionManagerOldName = "envoy.http_connection_manager"
 	httpConnectionManagerNewName = "envoy.filters.network.http_connection_manager"
 )
+
+func extractRdsResourceNames(listener *envoy_listener_v3.Listener) ([]string, error) {
+	var found []string
+
+	for chainIdx, chain := range listener.FilterChains {
+		for filterIdx, filter := range chain.Filters {
+			if filter.Name != httpConnectionManagerNewName {
+				continue
+			}
+
+			tc, ok := filter.ConfigType.(*envoy_listener_v3.Filter_TypedConfig)
+			if !ok {
+				return nil, fmt.Errorf(
+					"filter chain %d has a %q filter %d with an unsupported config type: %T",
+					chainIdx,
+					filter.Name,
+					filterIdx,
+					filter.ConfigType,
+				)
+			}
+
+			var hcm envoy_http_v3.HttpConnectionManager
+			if err := ptypes.UnmarshalAny(tc.TypedConfig, &hcm); err != nil {
+				return nil, err
+			}
+
+			if hcm.RouteSpecifier == nil {
+				continue
+			}
+
+			rds, ok := hcm.RouteSpecifier.(*envoy_http_v3.HttpConnectionManager_Rds)
+			if !ok {
+				continue
+			}
+
+			if rds.Rds == nil {
+				continue
+			}
+
+			found = append(found, rds.Rds.RouteConfigName)
+		}
+	}
+
+	return found, nil
+}
 
 // Locate the existing http connect manager L4 filter and inject our RBAC filter at the top.
 func injectHTTPFilterOnFilterChains(
@@ -947,7 +1033,6 @@ func (s *ResourceGenerator) makeTerminatingGatewayListener(
 
 		clusterChain, err := s.makeFilterChainTerminatingGateway(
 			cfgSnap,
-			name,
 			clusterName,
 			svc,
 			intentions,
@@ -966,7 +1051,6 @@ func (s *ResourceGenerator) makeTerminatingGatewayListener(
 
 				subsetClusterChain, err := s.makeFilterChainTerminatingGateway(
 					cfgSnap,
-					name,
 					subsetClusterName,
 					svc,
 					intentions,
@@ -1009,7 +1093,7 @@ func (s *ResourceGenerator) makeTerminatingGatewayListener(
 
 func (s *ResourceGenerator) makeFilterChainTerminatingGateway(
 	cfgSnap *proxycfg.ConfigSnapshot,
-	listener, cluster string,
+	cluster string,
 	service structs.ServiceName,
 	intentions structs.Intentions,
 	protocol string,
@@ -1047,13 +1131,12 @@ func (s *ResourceGenerator) makeFilterChainTerminatingGateway(
 	// Lastly we setup the actual proxying component. For L4 this is a straight
 	// tcp proxy. For L7 this is a very hands-off HTTP proxy just to inject an
 	// HTTP filter to do intention checks here instead.
-	statPrefix := fmt.Sprintf("terminating_gateway.%s.%s.", service.NamespaceOrDefault(), service.Name)
 	opts := listenerFilterOpts{
 		protocol:   protocol,
-		filterName: listener,
+		filterName: fmt.Sprintf("%s.%s.%s", service.Name, service.NamespaceOrDefault(), cfgSnap.Datacenter),
 		routeName:  cluster, // Set cluster name for route config since each will have its own
 		cluster:    cluster,
-		statPrefix: statPrefix,
+		statPrefix: "upstream.",
 		routePath:  "",
 	}
 
@@ -1253,7 +1336,10 @@ func (s *ResourceGenerator) makeUpstreamFilterChainForDiscoveryChain(
 	if overrideCluster != "" {
 		useRDS = false
 		clusterName = overrideCluster
-		filterName = overrideCluster
+
+		if destination == "" {
+			filterName = overrideCluster
+		}
 	}
 
 	opts := listenerFilterOpts{

@@ -8,7 +8,7 @@ GOTOOLS = \
 	github.com/gogo/protobuf/protoc-gen-gofast@$(GOGOVERSION) \
 	github.com/hashicorp/protoc-gen-go-binary \
 	github.com/vektra/mockery/cmd/mockery \
-	github.com/golangci/golangci-lint/cmd/golangci-lint@v1.23.6
+	github.com/golangci/golangci-lint/cmd/golangci-lint@v1.40.1
 
 GOTAGS ?=
 GOOS?=$(shell go env GOOS)
@@ -315,10 +315,12 @@ ui: ui-docker static-assets-docker
 
 tools:
 	@mkdir -p .gotools
-	@cd .gotools && if [[ ! -f go.mod ]]; then \
+	@cd .gotools && for TOOL in $(GOTOOLS); do \
+		echo "=== TOOL: $$TOOL" ; \
+		rm -f go.mod go.sum ; \
 		go mod init consul-tools ; \
-	fi
-	cd .gotools && go get -v $(GOTOOLS)
+		go get -v $$TOOL ; \
+	done
 
 version:
 	@echo -n "Version:                    "

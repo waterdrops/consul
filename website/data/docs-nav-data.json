@@ -14,10 +14,6 @@
             "path": "intro/vs"
           },
           {
-            "title": "ZooKeeper, doozerd, etcd",
-            "path": "intro/vs/zookeeper"
-          },
-          {
             "title": "Chef, Puppet, etc.",
             "path": "intro/vs/chef-puppet"
           },
@@ -236,7 +232,7 @@
         "path": "connect/intentions-legacy"
       },
       {
-        "title": "Transparent Proxy <sup>Beta</sup>",
+        "title": "Transparent Proxy",
         "path": "connect/transparent-proxy"
       },
       {
@@ -411,6 +407,10 @@
                 "path": "k8s/installation/deployment-configurations/servers-outside-kubernetes"
               },
               {
+                "title": "Single Consul Datacenter in Multiple Kubernetes Clusters",
+                "path": "k8s/installation/deployment-configurations/single-dc-multi-k8s"
+              },
+              {
                 "title": "Consul Enterprise",
                 "path": "k8s/installation/deployment-configurations/consul-enterprise"
               }
@@ -523,6 +523,10 @@
             "path": "k8s/operations/certificate-rotation"
           },
           {
+            "title": "Gossip Encryption Key Rotation",
+            "path": "k8s/operations/gossip-encryption-key-rotation"
+          },
+          {
             "title": "Configure TLS on an Existing Cluster",
             "path": "k8s/operations/tls-on-existing-cluster"
           }
@@ -544,6 +548,36 @@
       {
         "title": "Helm Chart Configuration",
         "path": "k8s/helm"
+      }
+    ]
+  },
+  {
+    "title": "AWS ECS <sup>Tech Preview</sup>",
+    "routes": [
+      {
+        "title": "Overview",
+        "path": "ecs"
+      },
+      {
+        "title": "Get Started",
+        "routes": [
+          {
+            "title": "Example Installation",
+            "href": "https://registry.terraform.io/modules/hashicorp/consul-ecs/aws/latest/examples/dev-server-fargate"
+          },
+          {
+            "title": "Requirements",
+            "path": "ecs/get-started/requirements"
+          },
+          {
+            "title": "Install",
+            "path": "ecs/get-started/install"
+          }
+        ]
+      },
+      {
+        "title": "Architecture",
+        "path": "ecs/architecture"
       }
     ]
   },
@@ -755,7 +789,7 @@
     ]
   },
   {
-    "title": "Enterprise Features",
+    "title": "Consul Enterprise",
     "routes": [
       {
         "title": "Overview",
@@ -800,6 +834,19 @@
       {
         "title": "Sentinel",
         "path": "enterprise/sentinel"
+      },
+      {
+        "title": "License",
+        "routes": [
+          {
+            "title": "Overview",
+            "path": "enterprise/license/overview"
+          },
+          {
+            "title": "FAQ",
+            "path": "enterprise/license/faq"
+          }
+        ]
       }
     ]
   },
@@ -896,8 +943,12 @@
             "path": "upgrading/instructions/upgrade-to-1-6-x"
           },
           {
-            "title": "Upgrading to 1.8.10",
+            "title": "Upgrading to 1.8.13",
             "path": "upgrading/instructions/upgrade-to-1-8-x"
+          },
+          {
+            "title": "Upgrading to 1.10.0",
+            "path": "upgrading/instructions/upgrade-to-1-10-x"
           }
         ]
       }
@@ -922,6 +973,10 @@
       {
         "title": "1.9.0",
         "path": "release-notes/1-9-0"
+      },
+      {
+        "title": "1.10.0",
+        "path": "release-notes/1-10-0"
       }
     ]
   },

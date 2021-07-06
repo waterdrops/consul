@@ -169,6 +169,10 @@ func (e *ServiceConfigEntry) Validate() error {
 			if err != nil {
 				validationErr = multierror.Append(validationErr, fmt.Errorf("error in upstream override for %s: %v", override.ServiceName(), err))
 			}
+
+			if err := validateInnerEnterpriseMeta(&override.EnterpriseMeta, &e.EnterpriseMeta); err != nil {
+				validationErr = multierror.Append(validationErr, fmt.Errorf("error in upstream override for %s: %v", override.ServiceName(), err))
+			}
 		}
 
 		if e.UpstreamConfig.Defaults != nil {
@@ -639,13 +643,21 @@ func (r *ServiceConfigRequest) CacheInfo() cache.RequestInfo {
 	// the slice would affect cache keys if we ever persist between agent restarts
 	// and change it.
 	v, err := hashstructure.Hash(struct {
-		Name           string
-		EnterpriseMeta EnterpriseMeta
-		Upstreams      []string `hash:"set"`
+		Name              string
+		EnterpriseMeta    EnterpriseMeta
+		Upstreams         []string    `hash:"set"`
+		UpstreamIDs       []ServiceID `hash:"set"`
+		MeshGatewayConfig MeshGatewayConfig
+		ProxyMode         ProxyMode
+		Filter            string
 	}{
-		Name:           r.Name,
-		EnterpriseMeta: r.EnterpriseMeta,
-		Upstreams:      r.Upstreams,
+		Name:              r.Name,
+		EnterpriseMeta:    r.EnterpriseMeta,
+		Upstreams:         r.Upstreams,
+		UpstreamIDs:       r.UpstreamIDs,
+		ProxyMode:         r.Mode,
+		MeshGatewayConfig: r.MeshGateway,
+		Filter:            r.QueryOptions.Filter,
 	}, nil)
 	if err == nil {
 		// If there is an error, we don't set the key. A blank key forces
@@ -781,12 +793,21 @@ func (cfg UpstreamConfig) validate(named bool) error {
 		if cfg.Name == "" {
 			return fmt.Errorf("Name is required")
 		}
+		if cfg.Name == WildcardSpecifier {
+			return fmt.Errorf("Wildcard name is not supported")
+		}
+		if cfg.EnterpriseMeta.NamespaceOrDefault() == WildcardSpecifier {
+			return fmt.Errorf("Wildcard namespace is not supported")
+		}
 	} else {
 		if cfg.Name != "" {
 			return fmt.Errorf("Name must be empty")
 		}
 		if cfg.EnterpriseMeta.NamespaceOrEmpty() != "" {
 			return fmt.Errorf("Namespace must be empty")
+		}
+		if cfg.EnterpriseMeta.PartitionOrEmpty() != "" {
+			return fmt.Errorf("Partition must be empty")
 		}
 	}
 
@@ -964,12 +985,6 @@ type ServiceConfigResponse struct {
 	TransparentProxy  TransparentProxyConfig `json:",omitempty"`
 	Mode              ProxyMode              `json:",omitempty"`
 	QueryMeta
-}
-
-func (r *ServiceConfigResponse) Reset() {
-	r.ProxyConfig = nil
-	r.UpstreamConfigs = nil
-	r.MeshGateway = MeshGatewayConfig{}
 }
 
 // MarshalBinary writes ServiceConfigResponse as msgpack encoded. It's only here

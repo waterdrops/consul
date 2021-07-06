@@ -30,7 +30,7 @@ type Store struct {
 
 	// idleTTL is the duration of time an entry should remain in the Store after the
 	// last request for that entry has been terminated. It is a field on the struct
-	// so that it can be patched in tests without need a lock.
+	// so that it can be patched in tests without needing a global lock.
 	idleTTL time.Duration
 }
 
@@ -118,12 +118,15 @@ func (s *Store) Get(ctx context.Context, req Request) (Result, error) {
 	}
 	defer s.releaseEntry(key)
 
-	ctx, cancel := context.WithTimeout(ctx, info.Timeout)
-	defer cancel()
+	if info.Timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, info.Timeout)
+		defer cancel()
+	}
 
 	result, err := materializer.getFromView(ctx, info.MinIndex)
-	// context.DeadlineExceeded is translated to nil to match the behaviour of
-	// agent/cache.Cache.Get.
+	// context.DeadlineExceeded is translated to nil to match the timeout
+	// behaviour of agent/cache.Cache.Get.
 	if err == nil || errors.Is(err, context.DeadlineExceeded) {
 		return result, nil
 	}
@@ -168,7 +171,7 @@ func (s *Store) Notify(
 			u := cache.UpdateEvent{
 				CorrelationID: correlationID,
 				Result:        result.Value,
-				Meta:          cache.ResultMeta{Index: result.Index},
+				Meta:          cache.ResultMeta{Index: result.Index, Hit: result.Cached},
 			}
 			select {
 			case updateCh <- u:

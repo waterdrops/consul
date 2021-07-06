@@ -49,6 +49,7 @@ import (
 	"github.com/hashicorp/consul/lib"
 	"github.com/hashicorp/consul/lib/file"
 	"github.com/hashicorp/consul/lib/mutex"
+	"github.com/hashicorp/consul/lib/routine"
 	"github.com/hashicorp/consul/logging"
 	"github.com/hashicorp/consul/tlsutil"
 	"github.com/hashicorp/consul/types"
@@ -327,6 +328,10 @@ type Agent struct {
 	// into Agent, which will allow us to remove this field.
 	rpcClientHealth *health.Client
 
+	// routineManager is responsible for managing longer running go routines
+	// run by the Agent
+	routineManager *routine.Manager
+
 	// enterpriseAgent embeds fields that we only access in consul-enterprise builds
 	enterpriseAgent
 }
@@ -371,6 +376,7 @@ func New(bd BaseDeps) (*Agent, error) {
 		tlsConfigurator: bd.TLSConfigurator,
 		config:          bd.RuntimeConfig,
 		cache:           bd.Cache,
+		routineManager:  routine.NewManager(bd.Logger),
 	}
 
 	// TODO: create rpcClientHealth in BaseDeps once NetRPC is available without Agent
@@ -388,6 +394,7 @@ func New(bd BaseDeps) (*Agent, error) {
 			Conn:   conn,
 			Logger: bd.Logger.Named("rpcclient.health"),
 		},
+		UseStreamingBackend: a.config.UseStreamingBackend,
 	}
 
 	a.serviceManager = NewServiceManager(&a)
@@ -455,6 +462,10 @@ func (a *Agent) Start(ctx context.Context) error {
 
 	if err := a.tlsConfigurator.Update(a.config.ToTLSUtilConfig()); err != nil {
 		return fmt.Errorf("Failed to load TLS configurations after applying auto-config settings: %w", err)
+	}
+
+	if err := a.startLicenseManager(ctx); err != nil {
+		return err
 	}
 
 	// create the local state
@@ -1338,6 +1349,8 @@ func (a *Agent) ShutdownAgent() error {
 	a.logger.Info("Requesting shutdown")
 	// Stop the watches to avoid any notification/state change during shutdown
 	a.stopAllWatches()
+
+	a.stopLicenseManager()
 
 	// this would be cancelled anyways (by the closing of the shutdown ch) but
 	// this should help them to be stopped more quickly
@@ -2555,6 +2568,7 @@ func (a *Agent) addCheck(check *structs.HealthCheck, chkType *structs.CheckType,
 					return err
 				}
 				http.ProxyHTTP = httpInjectAddr(http.HTTP, proxy.Address, port)
+				check.ExposedPort = port
 			}
 
 			http.Start()
@@ -2624,6 +2638,7 @@ func (a *Agent) addCheck(check *structs.HealthCheck, chkType *structs.CheckType,
 					return err
 				}
 				grpc.ProxyGRPC = grpcInjectAddr(grpc.GRPC, proxy.Address, port)
+				check.ExposedPort = port
 			}
 
 			grpc.Start()
@@ -3069,6 +3084,17 @@ func (a *Agent) Stats() map[string]map[string]string {
 		"version":    a.config.Version,
 		"prerelease": a.config.VersionPrerelease,
 	}
+
+	for outerKey, outerValue := range a.enterpriseStats() {
+		if _, ok := stats[outerKey]; ok {
+			for innerKey, innerValue := range outerValue {
+				stats[outerKey][innerKey] = innerValue
+			}
+		} else {
+			stats[outerKey] = outerValue
+		}
+	}
+
 	return stats
 }
 
@@ -3809,6 +3835,8 @@ func (a *Agent) rerouteExposedChecks(serviceID structs.ServiceID, proxyAddr stri
 			return err
 		}
 		c.ProxyHTTP = httpInjectAddr(c.HTTP, proxyAddr, port)
+		hc := a.State.Check(cid)
+		hc.ExposedPort = port
 	}
 	for cid, c := range a.checkGRPCs {
 		if c.ServiceID != serviceID {
@@ -3819,6 +3847,8 @@ func (a *Agent) rerouteExposedChecks(serviceID structs.ServiceID, proxyAddr stri
 			return err
 		}
 		c.ProxyGRPC = grpcInjectAddr(c.GRPC, proxyAddr, port)
+		hc := a.State.Check(cid)
+		hc.ExposedPort = port
 	}
 	return nil
 }
@@ -3831,12 +3861,16 @@ func (a *Agent) resetExposedChecks(serviceID structs.ServiceID) {
 	for cid, c := range a.checkHTTPs {
 		if c.ServiceID == serviceID {
 			c.ProxyHTTP = ""
+			hc := a.State.Check(cid)
+			hc.ExposedPort = 0
 			ids = append(ids, cid)
 		}
 	}
 	for cid, c := range a.checkGRPCs {
 		if c.ServiceID == serviceID {
 			c.ProxyGRPC = ""
+			hc := a.State.Check(cid)
+			hc.ExposedPort = 0
 			ids = append(ids, cid)
 		}
 	}
